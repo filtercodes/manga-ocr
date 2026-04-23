@@ -1,5 +1,6 @@
 import os
 import random
+import mmap
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from manga_ocr_dev.synthetic_data_generator.dirt_pipeline import build_dirt_pipeline
@@ -29,34 +30,61 @@ class RetroGenerator:
         
         self.fantasy_keywords = ["剣", "魔法", "装備", "魔王", "勇者", "冒険", "宿屋", "薬草", "洞窟", "城"]
 
-        # THE FIX: Load entire corpus into RAM for O(1) access
-        corpus_path = "local_corpus.txt"
-        if os.path.exists(corpus_path):
-            with open(corpus_path, "r", encoding="utf-8") as f:
-                self.text_corpus = f.read().splitlines()
+        # THE FIX: Use mmap for instant access to 600MB+ file without reading it into RAM
+        self.corpus_path = "local_corpus.txt"
+        self.file_size = 0
+        self.mmap_obj = None
+        
+        if os.path.exists(self.corpus_path):
+            self.file_size = os.path.getsize(self.corpus_path)
+            self.f_obj = open(self.corpus_path, "rb")
+            self.mmap_obj = mmap.mmap(self.f_obj.fileno(), 0, access=mmap.ACCESS_READ)
         else:
-            self.text_corpus = ["冒険の始まりだ！魔法の剣を装備せよ。"]
+            self.text_corpus_fallback = ["冒険の始まりだ！魔法の剣を装備せよ。"]
+
+    def __del__(self):
+        if self.mmap_obj:
+            self.mmap_obj.close()
+        if hasattr(self, 'f_obj'):
+            self.f_obj.close()
 
     def get_random_text(self, min_chars=10, max_chars=26):
-        # THE FIX: Instant RAM selection
-        line = random.choice(self.text_corpus)
+        if not self.mmap_obj:
+            return random.choice(self.text_corpus_fallback)
+
+        # Pick a random byte offset and find the next valid line
+        # We seek to a random spot, then read until we find a newline to align
+        offset = random.randint(0, max(0, self.file_size - 1000))
+        self.mmap_obj.seek(offset)
         
-        if len(line) < max_chars:
-            # Simple fallback if line is too short
-            return (line + " " + "冒険の書を記録します。")[:max_chars]
+        # Skip the current partial line
+        self.mmap_obj.readline()
+        
+        # Read the next full line
+        line_bytes = self.mmap_obj.readline()
+        if not line_bytes:
+            # If we hit EOF, just pick the first line
+            self.mmap_obj.seek(0)
+            line_bytes = self.mmap_obj.readline()
+            
+        line = line_bytes.decode('utf-8', errors='ignore').strip()
+        
+        if len(line) < min_chars:
+            # Recurse once if we got an empty/short line
+            line = "宿屋で体力を回復させた。"
                 
-        start = random.randint(0, len(line) - max_chars)
-        length = random.randint(min_chars, max_chars)
-        chunk = line[start:start+length]
+        # Slice a random chunk from the line
+        if len(line) > max_chars:
+            start = random.randint(0, len(line) - max_chars)
+            line = line[start:start+max_chars]
         
         if random.random() < 0.2:
             keyword = random.choice(self.fantasy_keywords)
-            insert_pos = random.randint(0, len(chunk))
-            chunk = chunk[:insert_pos] + keyword + chunk[insert_pos:]
-            chunk = chunk[:max_chars]
+            insert_pos = random.randint(0, len(line))
+            line = line[:insert_pos] + keyword + line[insert_pos:]
+            line = line[:max_chars]
                 
-            return chunk
-        return chunk
+        return line
 
     def get_background_crop(self, map_img, width=700, height=200):
         map_w, map_h = map_img.size
