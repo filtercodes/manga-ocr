@@ -25,8 +25,8 @@ def f(args):
         
         filename = f"{id_}.jpg"
         
-        # Generate image, text and font path
-        img, text_gt, font_path = _worker_gen.generate_one()
+        # Catch the 4th return value (debug_dict) for observability
+        img, text_gt, font_path, debug_dict = _worker_gen.generate_one()
         
         # Save
         cv2.imwrite(str(out_dir / filename), img)
@@ -34,19 +34,38 @@ def f(args):
         # Extract relative font filename for metadata
         font_filename = Path(font_path).name
         
-        return source, id_, text_gt, False, font_filename
+        # Return a flat tuple containing standard data PLUS the debug fields
+        return (
+            source, id_, text_gt, False, font_filename,
+            debug_dict["category"],
+            debug_dict["archetype"],
+            debug_dict["bg_luminance"],
+            debug_dict["bg_noise"],
+            debug_dict["fg_color"],
+            debug_dict["outline_color"],
+            debug_dict["outline_iters"],
+            debug_dict["outline_shape"],
+            debug_dict["has_shadow"],
+            debug_dict["pipeline_used"]
+        )
 
     except Exception:
         print(traceback.format_exc())
         return None
 
-def run(package=0, n_random=1000, n_limit=None, max_workers=12):
+def run(package=None, n_random=1000, n_limit=None, max_workers=12):
     """
-    :param package: number of data package to generate
+    :param package: specific package number (auto-increments if None)
     :param n_random: how many samples with random text to generate
     :param n_limit: limit number of generated samples (for debugging)
     :param max_workers: max number of workers
     """
+    # Auto-increment logic
+    if package is None:
+        package = 0
+        while (DATA_SYNTHETIC_ROOT / "img" / f"{package:04d}").exists():
+            package += 1
+            
     package_str = f"{package:04d}"
     out_dir = DATA_SYNTHETIC_ROOT / "img" / package_str
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -69,7 +88,15 @@ def run(package=0, n_random=1000, n_limit=None, max_workers=12):
     # Filter out any None results from exceptions
     data = [d for d in data if d is not None]
 
-    data_df = pd.DataFrame(data, columns=["source", "id", "text", "vertical", "font_path"])
+    # Expand columns to include telemetry metadata
+    columns = [
+        "source", "id", "text", "vertical", "font_path", 
+        "debug_category", "debug_archetype", "debug_luminance", "debug_noise",
+        "debug_fg_color", "debug_outline_color", "debug_outline_iters", 
+        "debug_outline_shape", "debug_shadow", "debug_pipeline"
+    ]
+    
+    data_df = pd.DataFrame(data, columns=columns)
     meta_path = DATA_SYNTHETIC_ROOT / f"meta/{package_str}.csv"
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     data_df.to_csv(meta_path, index=False)
