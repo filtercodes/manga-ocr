@@ -1,13 +1,11 @@
 import os
 import random
-import mmap
 import json
 import re
 import numpy as np
 import cv2
 from PIL import Image, ImageDraw, ImageFont, ImageStat
 from manga_ocr_dev.synthetic_data_generator.dirt_pipeline import build_dirt_pipeline
-from pathlib import Path
 
 class RetroGenerator:
     def __init__(self, 
@@ -64,9 +62,6 @@ class RetroGenerator:
         # pool of characters for the 10% Name Overfitting Protection
         self.nonsense_chars = "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン"
 
-        self.mmap_obj = None
-        self.file_size = 0
-
     def get_random_sample(self):
         """
         Picks a random line from our structured corpus.
@@ -122,7 +117,7 @@ class RetroGenerator:
                 if bg_img.mode == 'P' and 'transparency' in bg_img.info:
                     bg_img = bg_img.convert('RGBA')
                 bg_img = bg_img.convert("RGB")
-            except:
+            except Exception:
                 bg_img = random.choice([self.map_crt, self.map_gb])
         else:
             bg_img = random.choice([self.map_crt, self.map_gb])

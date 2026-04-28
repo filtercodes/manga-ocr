@@ -1,5 +1,4 @@
 import albumentations as A
-import cv2
 from manga_ocr_dev.synthetic_data_generator.crt_emulator import CRTDistortion, GameBoyFilter, SmoothUpscale
 
 def build_dirt_pipeline(mode="crt", gb_palette="random"):

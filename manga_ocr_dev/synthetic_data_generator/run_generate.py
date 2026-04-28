@@ -4,10 +4,10 @@ from pathlib import Path
 import cv2
 import fire
 import pandas as pd
-# THE FIX: Swap thread_map for process_map to bypass GIL
+# Swap thread_map for process_map to bypass GIL
 from tqdm.contrib.concurrent import process_map 
 
-from manga_ocr_dev.env import FONTS_ROOT, DATA_SYNTHETIC_ROOT
+from manga_ocr_dev.env import DATA_SYNTHETIC_ROOT
 from manga_ocr_dev.synthetic_data_generator.retro_generator import RetroGenerator
 
 # Global cache for the generator to avoid re-initialization in worker processes

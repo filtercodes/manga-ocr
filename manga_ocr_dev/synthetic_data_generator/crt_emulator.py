@@ -156,11 +156,11 @@ class CRTDistortion(A.DualTransform):
         distance = np.mod(y_coords, spacing)
         distance = np.where(distance > spacing / 2, spacing - distance, distance)
         
-        I = np.exp(- (distance**2) / (W**2 + 1e-5))
+        intensity_scaler = np.exp(- (distance**2) / (W**2 + 1e-5))
         if len(img.shape) == 3:
-            I = np.expand_dims(I, axis=-1)
+            intensity_scaler = np.expand_dims(intensity_scaler, axis=-1)
             
-        blended = img_float * (1.0 - scanline_alpha + scanline_alpha * I)
+        blended = img_float * (1.0 - scanline_alpha + scanline_alpha * intensity_scaler)
         return np.clip(blended * 255.0, 0, 255).astype(np.uint8)
 
     def _apply_phosphor_mask(self, img, mask_type):
