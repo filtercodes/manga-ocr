@@ -12,7 +12,7 @@ class CRTDistortion(A.DualTransform):
         k1_range=(-0.05, 0.05),
         k2_range=(-0.02, 0.02),
         bloom_scale_range=(0.0, 0.3),
-        scanline_alpha_range=(0.2, 0.6),
+        scanline_alpha_range=(0.01, 0.06),
         mask_types=("aperture", "slot", "shadow", "none"),
         always_apply=False,
         p=0.5
@@ -25,6 +25,17 @@ class CRTDistortion(A.DualTransform):
         self.mask_types = mask_types
 
     def get_params_dependent_on_data(self, params, data):
+
+        # 50% Moiré Variation (Grid Frequency & Phase Shift)
+        if self.py_random.random() < 0.50:
+            # Randomizing spacing between 2.2 and 4.2 completely alters the Moiré shape
+            scan_spacing = self.py_random.uniform(2.2, 44.2)
+            # Randomizing offset pushes the scanlines up/down, creating the "movement"
+            scan_offset = self.py_random.uniform(0.0, 10.0)
+        else:
+            # Default value
+            scan_spacing = 3.0
+            scan_offset = 0.0
         return {
             "k1": self.py_random.uniform(*self.k1_range),
             "k2": self.py_random.uniform(*self.k2_range),
@@ -32,10 +43,12 @@ class CRTDistortion(A.DualTransform):
             "scanline_alpha": self.py_random.uniform(*self.scanline_alpha_range),
             "mask_type": self.py_random.choice(self.mask_types),
             "converge_x": self.py_random.uniform(-0.4, 0.4),
-            "converge_y": self.py_random.uniform(-0.4, 0.4)
+            "converge_y": self.py_random.uniform(-0.4, 0.4),
+            "scanline_spacing": scan_spacing,
+            "scanline_offset": scan_offset
         }
 
-    def apply(self, img, k1=0.0, k2=0.0, bloom_scale=0.0, scanline_alpha=0.0, mask_type="none", converge_x=0.0, converge_y=0.0, **params):
+    def apply(self, img, k1=0.0, k2=0.0, bloom_scale=0.0, scanline_alpha=0.0, mask_type="none", converge_x=0.0, converge_y=0.0, scanline_spacing=3.0, scanline_offset=0.0, **params):
         # 1. Chromatic Aberration (electron gun misalignment)
         img = self._apply_chromatic_aberration(img, converge_x, converge_y)
         
@@ -43,7 +56,7 @@ class CRTDistortion(A.DualTransform):
         img = self._apply_bloom(img, bloom_scale)
         
         # 3. Scanlines (Dynamic Width based on luminance)
-        img = self._apply_scanlines(img, scanline_alpha)
+        img = self._apply_scanlines(img, scanline_alpha, scanline_spacing, scanline_offset)
         
         # 4. Phosphor Mask (Procedural layout)
         if mask_type != "none":
@@ -122,7 +135,7 @@ class CRTDistortion(A.DualTransform):
         blended = img_float + accum
         return np.clip(blended, 0, 255).astype(np.uint8)
 
-    def _apply_scanlines(self, img, scanline_alpha):
+    def _apply_scanlines(self, img, scanline_alpha, spacing=3.0, offset=0.0):
         h, w = img.shape[:2]
         img_float = img.astype(np.float32) / 255.0
         
@@ -133,13 +146,13 @@ class CRTDistortion(A.DualTransform):
             L = img_float
             img_float = np.expand_dims(img_float, axis=-1)
 
-        spacing = 3.0
         alpha = 0.5
         beta = 0.5
         # Line width expands based on luminance
         W = alpha + beta * L
-        
-        y_coords = np.arange(h).reshape(-1, 1)
+       
+        # Adding offset (phase shift) to the scan line Y coordinates
+        y_coords = np.arange(h).reshape(-1, 1) + offset
         distance = np.mod(y_coords, spacing)
         distance = np.where(distance > spacing / 2, spacing - distance, distance)
         

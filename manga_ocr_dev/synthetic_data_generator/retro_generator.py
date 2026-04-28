@@ -11,11 +11,11 @@ from pathlib import Path
 
 class RetroGenerator:
     def __init__(self, 
-                 map_crt_path="manga-ocr/assets/maps/zelda_lttp.png", 
-                 map_gb_path="manga-ocr/assets/maps/zelda_gb.png",
+                 map_crt_path="map_lttp.png",
+                 map_gb_path="map_gb.png",
                  pixel_art_dir="pixel_art",
                  corpus_path="structured_corpus.json"):
-        # Load the base Zelda maps for the 'classic' 60% category
+        # Load the base maps for the 'classic' 60% category
         self.map_crt = Image.open(map_crt_path).convert("RGB")
         self.map_gb = Image.open(map_gb_path).convert("RGB")
         
@@ -262,9 +262,20 @@ class RetroGenerator:
         """
         The Orchestrator. Implements 60/30/10 split and four spatial archetypes.
         """
+
+        # Sniper test
+        DEBUG_FORCE_STRESS = False
+        DEBUG_FORCE_LCD = False
+        # End of sniper test
+
         # --- 1. THE SPLIT & SIZING ---
         roll = random.random()
         category = "classic" if roll < 0.60 else ("stress" if roll < 0.90 else "pristine")
+
+        # Sniper test
+        if DEBUG_FORCE_STRESS:
+            category = "stress"
+        # End of sniper test
 
         font_config = random.choice(self.font_pool)
         font_size = font_config["size"]
@@ -315,16 +326,21 @@ class RetroGenerator:
         
         # Calculate the average color and brightness of the target region where text starts
         # We crop a rough 150x50 patch to scout the local background noise
-        crop_box = (pad_left, pad_top, min(bg.width, pad_left + 150), min(bg.height, pad_top + 50))
+        #crop_box = (pad_left, pad_top, min(bg.width, pad_left + 150), min(bg.height, pad_top + 50))
+        crop_box = (pad_left, pad_top, max(pad_left + 10, bg.width - pad_right), max(pad_top + 10, bg.height - pad_bottom))
         stat = ImageStat.Stat(bg.crop(crop_box))
         bg_mean = stat.mean[:3] # Average [R, G, B]
-        bg_stddev = stat.stddev[:3] # NEW: Extract the Standard Deviation (Noise/Texture)
+        bg_stddev = stat.stddev[:3] # Extract the Standard Deviation (Noise/Texture)
+        extrema = stat.extrema[:3] # Grabs [(Rmin, Rmax), (Gmin, Gmax), (Bmin, Bmax)]
         
         # Standard luminance formula to determine if background is light or dark
         luminance = 0.299 * bg_mean[0] + 0.587 * bg_mean[1] + 0.114 * bg_mean[2]
         
-        # NEW: Calculate overall Texture/Noise Chaos
+        # Calculate overall Texture/Noise Chaos
         noise_level = 0.299 * bg_stddev[0] + 0.587 * bg_stddev[1] + 0.114 * bg_stddev[2]
+
+        # Calculate the harshest color contrast boundary in the region
+        max_color_swing = max([ex[1] - ex[0] for ex in extrema])
 
         # --- 3. THE COLOR PALETTE & ARCHETYPE RULES (Guaranteed Contrast) ---
         outline_color = None
@@ -338,10 +354,10 @@ class RetroGenerator:
             fg_color = (20, 20, 20)
         else: # STRESS CATEGORY (Adversarial)
             # 50% chance for DBZ Style, OR 100% chance if the background is highly chaotic/noisy.
-            # If noise_level > 40, the background has harsh contrasting spikes. We MUST deploy an outline shield.
-            if random.random() < 0.5 or noise_level > 40:
-                # Force the text color to perfectly match the background's average color
-                shift = random.randint(-15, 15)
+            # If noise_level > 40, the background has harsh contrasting spikes. We do an outline shield.
+            if random.random() < 0.5 or noise_level > 40 or max_color_swing > 210:
+                # Randomly choose to be noticeably darker OR noticeably brighter than the background.
+                shift = random.choice([random.randint(-50, -25), random.randint(25, 50)])
                 fg_color = tuple(int(max(0, min(255, c + shift))) for c in bg_mean)
                 
                 # The outline acts as a physical wall against the background noise
@@ -595,13 +611,21 @@ class RetroGenerator:
         if category != "pristine":
             # Quarantine xBRZ. 
             # xBRZ destroys delicate camouflaged outlines, so we ban it from the "stress" category.
-            available_pipelines = ["crt", "lcd"]
-            
-            # We only allow xBRZ on classic UI boxes where high contrast makes it safe (and bulky).
-            if category == "classic":
-                available_pipelines.append("xbrz")
+
+            # Sniper test
+            if DEBUG_FORCE_LCD:
+                mode_filter = "lcd"
+            else:
+
+                available_pipelines = ["crt", "lcd"]
                 
-            mode_filter = random.choice(available_pipelines)
+                # We only allow xBRZ on classic UI boxes where high contrast makes it safe (and bulky).
+                if category == "classic":
+                    available_pipelines.append("xbrz")
+                    
+                mode_filter = random.choice(available_pipelines)
+                # End of sniper test
+
             active_pipeline = self.pipelines[mode_filter]
             dirty_img = active_pipeline(image=img_np)["image"]
         else:
