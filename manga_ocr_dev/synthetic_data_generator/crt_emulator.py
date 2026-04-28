@@ -12,7 +12,7 @@ class CRTDistortion(A.DualTransform):
         k1_range=(-0.05, 0.05),
         k2_range=(-0.02, 0.02),
         bloom_scale_range=(0.0, 0.3),
-        scanline_alpha_range=(0.01, 0.06),
+        scanline_alpha_range=(0.01, 0.6),
         mask_types=("aperture", "slot", "shadow", "none"),
         always_apply=False,
         p=0.5
@@ -26,12 +26,12 @@ class CRTDistortion(A.DualTransform):
 
     def get_params_dependent_on_data(self, params, data):
 
-        # 50% Moiré Variation (Grid Frequency & Phase Shift)
-        if self.py_random.random() < 0.50:
-            # Randomizing spacing between 2.2 and 4.2 completely alters the Moiré shape
-            scan_spacing = self.py_random.uniform(2.2, 44.2)
+        # Moiré Variation (Grid Frequency & Phase Shift)
+        if self.py_random.random() < 0.80:
+            # Randomizing spacing between 2.2 and 4.2 alters the Moiré shape
+            scan_spacing = self.py_random.uniform(2.2, 4.2)
             # Randomizing offset pushes the scanlines up/down, creating the "movement"
-            scan_offset = self.py_random.uniform(0.0, 10.0)
+            scan_offset = self.py_random.uniform(0.0, 6.0)
         else:
             # Default value
             scan_spacing = 3.0

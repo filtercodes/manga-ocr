@@ -110,7 +110,9 @@ class RetroGenerator:
         Selects a background crop based on the 80/20 background split.
         """
         if mode == "pristine":
-            return Image.new("RGB", (width, height), (0, 0, 0))
+            # Generate random solid color background
+            r, g, b = random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)
+            return Image.new("RGB", (width, height), (r, g, b))
 
         # 80/20 Background Split Engine
         if self.pixel_art_backgrounds and random.random() < 0.80:
@@ -124,6 +126,17 @@ class RetroGenerator:
                 bg_img = random.choice([self.map_crt, self.map_gb])
         else:
             bg_img = random.choice([self.map_crt, self.map_gb])
+
+        # 50% chance to physically mirror or rotate the entire source map
+        if random.random() < 0.50:
+            transform = random.choice([
+                Image.Transpose.FLIP_LEFT_RIGHT,
+                Image.Transpose.FLIP_TOP_BOTTOM,
+                Image.Transpose.ROTATE_90,
+                Image.Transpose.ROTATE_180,
+                Image.Transpose.ROTATE_270
+            ])
+            bg_img = bg_img.transpose(transform)
 
         bw, bh = bg_img.size
         target_w = min(width, bw)
@@ -342,6 +355,10 @@ class RetroGenerator:
         # Calculate the harshest color contrast boundary in the region
         max_color_swing = max([ex[1] - ex[0] for ex in extrema])
 
+        # Find the darkest and brightest single pixel in the region
+        min_pixel = min([ex[0] for ex in extrema])
+        max_pixel = max([ex[1] for ex in extrema])
+
         # --- 3. THE COLOR PALETTE & ARCHETYPE RULES (Guaranteed Contrast) ---
         outline_color = None
         use_shadow = False
@@ -350,12 +367,19 @@ class RetroGenerator:
             # Classic UI boxes are usually dark, so text is always bright
             fg_color = random.choice([(255, 255, 255), (255, 255, 0), (0, 255, 255), (224, 224, 224)])
         elif category == "pristine":
-            # Inverted Dark-on-Light for pure topology regularization
-            fg_color = (20, 20, 20)
+            # Low-contrast topology training across the entire color spectrum
+            # We force a tight shift (+/- 15 to 40) so it's readable but mathematically challenging
+            shift = random.choice([random.randint(-40, -15), random.randint(15, 40)])
+            fg_color = tuple(int(max(0, min(255, c + shift))) for c in bg_mean)
+            use_shadow = False
         else: # STRESS CATEGORY (Adversarial)
+            # If we plan to use Black text (L > 128), but the background has pixels darker than 64, they will merge.
+            # If we plan to use White text (L <= 128), but the background has pixels brighter than 191, they will merge.
+            collapse_risk = (luminance > 128 and min_pixel < 64) or (luminance <= 128 and max_pixel > 191)
+
             # 50% chance for DBZ Style, OR 100% chance if the background is highly chaotic/noisy.
             # If noise_level > 40, the background has harsh contrasting spikes. We do an outline shield.
-            if random.random() < 0.5 or noise_level > 40 or max_color_swing > 210:
+            if random.random() < 0.5 or noise_level > 40 or max_color_swing > 210 or collapse_risk:
                 # Randomly choose to be noticeably darker OR noticeably brighter than the background.
                 shift = random.choice([random.randint(-50, -25), random.randint(25, 50)])
                 fg_color = tuple(int(max(0, min(255, c + shift))) for c in bg_mean)
@@ -640,8 +664,8 @@ class RetroGenerator:
             "bg_noise": round(noise_level, 2),
             "fg_color": str(fg_color),
             "outline_color": str(outline_color) if outline_color else "None",
-            "outline_iters": outline_iters,           # NEW: Thickness 
-            "outline_shape": outline_shape_name,      # NEW: Geometry
+            "outline_iters": outline_iters,
+            "outline_shape": outline_shape_name,
             "has_shadow": use_shadow,
             "pipeline_used": mode_filter
         }
