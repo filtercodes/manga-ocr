@@ -34,10 +34,12 @@ class RetroGenerator:
             {"path": "manga-ocr/assets/fonts/Mona12-Bold.ttf", "size": 12, "kanji_safe": False},
         ]
         
-        # Pre-build the 3 pipelines (CRT emulation, LCD grid, xBRZ smoothing)
+        # Pre-build the specific deterministic pipelines
         self.pipelines = {
             "crt": build_dirt_pipeline("crt"),
-            "lcd": build_dirt_pipeline("lcd"),
+            "lcd_green": build_dirt_pipeline("lcd", gb_palette="green"),
+            "lcd_gray": build_dirt_pipeline("lcd", gb_palette="gray"),
+            "lcd_color": build_dirt_pipeline("lcd", gb_palette="full_color"),
             "xbrz": build_dirt_pipeline("xbrz")
         }
         
@@ -69,7 +71,7 @@ class RetroGenerator:
         Includes 10% 'Nonsense Name' protection to prevent overfitting.
         """
         # DEBUG TRAIT: Set to True to ONLY generate images with character names
-        FORCE_SPEAKER = True
+        FORCE_SPEAKER = False
         
         while True:
             sample = random.choice(self.corpus)
@@ -271,19 +273,18 @@ class RetroGenerator:
         The Orchestrator. Implements 60/30/10 split and four spatial archetypes.
         """
 
-        # Sniper test
-        DEBUG_FORCE_STRESS = False
-        DEBUG_FORCE_LCD = False
-        # End of sniper test
-
         # --- 1. THE SPLIT & SIZING ---
         roll = random.random()
         category = "classic" if roll < 0.60 else ("stress" if roll < 0.90 else "pristine")
 
-        # Sniper test
-        if DEBUG_FORCE_STRESS:
-            category = "stress"
-        # End of sniper test
+        # Pipeline Decision Engine
+        if category == "pristine":
+            mode_filter = "None"
+        else:
+            available_pipelines = ["crt", "lcd_green", "lcd_gray", "lcd_color"]
+            if category == "classic":
+                available_pipelines.append("xbrz")
+            mode_filter = random.choice(available_pipelines)
 
         font_config = random.choice(self.font_pool)
         font_size = font_config["size"]
@@ -303,7 +304,7 @@ class RetroGenerator:
             if not font_config.get("kanji_safe", True):
                 # 8-bit bitmap fonts (Misaki, Nosutaru, Bold)
                 # Allow exactly 0 or 1 Kanji to provide context without illegible blobs.
-                if kanji_count <= 1:
+                if kanji_count < 1:
                     break 
             else:
                 # Vector or large fonts can handle infinite Kanji
@@ -370,11 +371,15 @@ class RetroGenerator:
         else: # STRESS CATEGORY (Adversarial)
             # If we plan to use Black text (L > 128), but the background has pixels darker than 64, they will merge.
             # If we plan to use White text (L <= 128), but the background has pixels brighter than 191, they will merge.
-            collapse_risk = (luminance > 128 and min_pixel < 64) or (luminance <= 128 and max_pixel > 191)
+            # We ONLY calculate quantization collapse risk for Game Boy pipelines
+            if mode_filter in ["lcd_green", "lcd_gray"]:
+                collapse_risk = (luminance > 128 and min_pixel < 64) or (luminance <= 128 and max_pixel > 191)
+            else:
+                collapse_risk = False
 
-            # 50% chance for DBZ Style, OR 100% chance if the background is highly chaotic/noisy.
+            # 20% chance for DBZ Style, OR 100% chance if the background is highly chaotic/noisy.
             # If noise_level > 40, the background has harsh contrasting spikes. We do an outline shield.
-            if random.random() < 0.5 or noise_level > 40 or max_color_swing > 210 or collapse_risk:
+            if random.random() < 0.2 or noise_level > 60 or max_color_swing > 210 or collapse_risk:
                 # Randomly choose to be noticeably darker OR noticeably brighter than the background.
                 shift = random.choice([random.randint(-50, -25), random.randint(25, 50)])
                 fg_color = tuple(int(max(0, min(255, c + shift))) for c in bg_mean)
@@ -628,28 +633,10 @@ class RetroGenerator:
         # --- 10. DEGRADATION & PIPELINE ---
         img_np = np.array(canvas.convert("RGB"))
         if category != "pristine":
-            # Quarantine xBRZ. 
-            # xBRZ destroys delicate camouflaged outlines, so we ban it from the "stress" category.
-
-            # Sniper test
-            if DEBUG_FORCE_LCD:
-                mode_filter = "lcd"
-            else:
-
-                available_pipelines = ["crt", "lcd"]
-                
-                # We only allow xBRZ on classic UI boxes where high contrast makes it safe (and bulky).
-                if category == "classic":
-                    available_pipelines.append("xbrz")
-                    
-                mode_filter = random.choice(available_pipelines)
-                # End of sniper test
-
             active_pipeline = self.pipelines[mode_filter]
             dirty_img = active_pipeline(image=img_np)["image"]
         else:
             dirty_img = img_np
-            mode_filter = "None"
             
         # Construct the telemetry dictionary for observability
         debug_dict = {
