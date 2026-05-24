@@ -168,7 +168,7 @@ class CRTDistortion(A.DualTransform):
         if len(img.shape) < 3 or img.shape[2] != 3:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
             
-        # THE FIX: Inactive phosphors only darken by 15%, leaving text highly legible
+        # Inactive phosphors only darken by 15%, leaving text highly legible
         floor = 0.85 
         
         if mask_type == "aperture":
@@ -217,7 +217,7 @@ class CRTDistortion(A.DualTransform):
         y_norm = (y - yc) / yc
         r2 = x_norm**2 + y_norm**2
         
-        # --- THE FIX: Viewport Scaling ---
+        # --- Viewport Scaling ---
         # Calculate the distortion at the furthest corner to find the "zoom" factor
         # needed to keep the image edges within the frame.
         r2_max = 1.0 # (at edge midpoints)
@@ -235,7 +235,7 @@ class GameBoyFilter(A.ImageOnlyTransform):
     Simulates the original DMG-01 Game Boy display by quantizing the image into 
     4 shades of olive green.
     """
-    def __init__(self, palette="green", always_apply=False, p=1.0):
+    def __init__(self, palette="green", p=1.0):
         super().__init__(p=p)
         self.palette = palette
         
@@ -285,15 +285,18 @@ class SmoothUpscale(A.ImageOnlyTransform):
     Simulates high-quality emulator upscaling (like xBRZ/hqNx) by 
     downsampling to native resolution and upsampling via Lanczos.
     """
-    def __init__(self, scale_factor=4, always_apply=False, p=1.0):
+    def __init__(self, scale_factor=4, p=1.0):
         super().__init__(p=p)
         self.scale_factor = scale_factor
 
-    def apply(self, img, **params):
+    def get_params(self):
+        return {"sc": self.scale_factor}
+
+    def apply(self, img, sc=4, **params):
         h, w = img.shape[:2]
-        # Use max(1, ...) to guarantee we never divide by zero or drop below 1 pixel
-        new_w = max(1, int(w / self.scale_factor))
-        new_h = max(1, int(h / self.scale_factor))
+        # Use sc passed from generator for perfect native alignment
+        new_w = max(1, int(round(w / sc)))
+        new_h = max(1, int(round(h / sc)))
         
         # 1. Downscale to native 1x resolution (or slightly above/below)
         native = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
@@ -303,3 +306,159 @@ class SmoothUpscale(A.ImageOnlyTransform):
 
     def get_transform_init_args_names(self):
         return ("scale_factor",)
+
+class XBRZFreescale(A.ImageOnlyTransform):
+    """
+    Simulates high-quality hardware edge-directed interpolation (xBRZ freescale).
+    Assumes input is already at native retro resolution. Upscales using a vectorized
+    CPU-bound 9-slice neighborhood evaluation, avoiding GPU transfer overheads.
+    Supports a 'smoothing_factor' to morph between Pure Diagonal and Full Edge-Directed.
+    """
+    def __init__(self, scale_factor=4.0, luma_weight=48.0, chroma_weight=7.0, p=1.0):
+        super().__init__(p=p)
+        self.scale_factor = float(scale_factor)
+        self.luma_weight = luma_weight
+        self.chroma_weight = chroma_weight
+
+    def get_params(self):
+        # Implementation of the 40/40/20 Probability Split
+        roll = np.random.random()
+        if roll < 0.40:
+            # 40% Full Edge-Directed (OpenEmu look)
+            sf = 1.0
+        elif roll < 0.80:
+            # 40% Random Morph Spectrum
+            sf = np.random.uniform(0.0, 1.0)
+        else:
+            # 20% Pure Diagonal (Sharp look)
+            sf = 0.0
+
+        return {
+            "l_w": self.luma_weight,
+            "c_w": self.chroma_weight,
+            "sc": self.scale_factor,
+            "sf": sf
+        }
+
+    def apply(self, img, sc=4.0, l_w=48.0, c_w=7.0, sf=1.0, **params):
+        orig_h, orig_w = img.shape[:2]
+
+        # Downscale to native 1x resolution
+        # Use the dynamic scale 'sc' passed from the generator
+        native_h = max(1, int(round(orig_h / sc)))
+        native_w = max(1, int(round(orig_w / sc)))
+        native_img = cv2.resize(img, (native_w, native_h), interpolation=cv2.INTER_NEAREST)
+
+        # Target dimensions (Return to the original upscaled size)
+        out_h, out_w = orig_h, orig_w
+
+        # Calculate actual scale factor used for this specific image to map coordinates
+        sc_x = out_w / native_w
+        sc_y = out_h / native_h
+
+        # 1. Convert to YCrCb for perceptual distance metrics
+        native_ycb = cv2.cvtColor(native_img, cv2.COLOR_RGB2YCrCb)
+
+        # 2. Emulate GL_CLAMP_TO_EDGE with 1-pixel reflection padding
+        pad_img = cv2.copyMakeBorder(native_img, 1, 1, 1, 1, cv2.BORDER_REPLICATE)
+        pad_ycb = cv2.copyMakeBorder(native_ycb, 1, 1, 1, 1, cv2.BORDER_REPLICATE)
+
+        # 3. Backward Mapping Coordinate Grid mapped to the upscaled target
+        dst_X, dst_Y = np.meshgrid(np.arange(out_w), np.arange(out_h))
+
+        src_X = dst_X / sc_x
+        src_Y = dst_Y / sc_y
+
+        # Integer base coordinates and fractional offsets
+        idx_X = np.floor(src_X).astype(np.int32)
+        idx_Y = np.floor(src_Y).astype(np.int32)
+        fx = src_X - idx_X
+        fy = src_Y - idx_Y
+
+        # Offset by +1 to account for the reflection padding
+        iy = idx_Y + 1
+        ix = idx_X + 1
+
+        # 4. Extract the 9 Shifted Array Slices
+        E = pad_img[iy, ix].astype(np.float32)
+        A = pad_img[iy-1, ix-1].astype(np.float32)
+        B = pad_img[iy-1, ix].astype(np.float32)
+        C = pad_img[iy-1, ix+1].astype(np.float32)
+        D = pad_img[iy, ix-1].astype(np.float32)
+        F_pix = pad_img[iy, ix+1].astype(np.float32)
+        G = pad_img[iy+1, ix-1].astype(np.float32)
+        H = pad_img[iy+1, ix].astype(np.float32)
+        I = pad_img[iy+1, ix+1].astype(np.float32)
+
+        # YCbCr Matrices for Edge Detection
+        E_y = pad_ycb[iy, ix]
+        A_y = pad_ycb[iy-1, ix-1]
+        B_y = pad_ycb[iy-1, ix]
+        C_y = pad_ycb[iy-1, ix+1]
+        D_y = pad_ycb[iy, ix-1]
+        F_y = pad_ycb[iy, ix+1]
+        G_y = pad_ycb[iy+1, ix-1]
+        H_y = pad_ycb[iy+1, ix]
+        I_y = pad_ycb[iy+1, ix+1]
+
+        # 5. Continuous Fractional Blending Weights
+        u = np.abs(fx - 0.5) * 2.0
+        v = np.abs(fy - 0.5) * 2.0
+
+        # Weight Sharpening
+        # By raising the weights to a power, we make the smoothing more 'local' to the edges.
+        # This preserves the structural core of 1px strokes in tiny fonts (10px).
+        W_corner = (u * v) ** 2.0
+        W_edge = np.maximum(u, v) ** 3.0
+
+        W_corner = W_corner[..., np.newaxis]
+        W_edge = W_edge[..., np.newaxis]
+
+        # 6. Evaluate Quadrants
+        is_R = fx >= 0.5
+        is_B = fy >= 0.5
+
+        # Initialize output with the central pixel
+        result = E.copy()
+
+        # --- Quad Evaluation helper ---
+        def blend_quad(mask, dist_c, dist_d, pix_edge, pix_diag):
+            # Full Edge-Directed: Use W_edge to aggressively melt the 'staircase' steps
+            res_edge = np.where(dist_c < dist_d, 
+                                (1.0 - W_edge) * E + W_edge * pix_edge, 
+                                (1.0 - W_corner) * E + W_corner * pix_diag)
+
+            # Pure Diagonal: Now allows full rounding at the extreme corners (no 0.5 dampening)
+            res_diag = (1.0 - W_corner) * E + W_corner * pix_diag
+
+            # Morph between them
+            return (1.0 - sf) * res_diag + sf * res_edge
+
+        # --- Bottom-Right Quadrant ---
+        mask_BR = (is_R & is_B)[..., np.newaxis]
+        result = np.where(mask_BR, blend_quad(mask_BR, self._np_color_dist(H_y, F_y, l_w, c_w), self._np_color_dist(E_y, I_y, l_w, c_w), (H + F_pix) * 0.5, I), result)
+
+        # --- Bottom-Left Quadrant ---
+        mask_BL = (~is_R & is_B)[..., np.newaxis]
+        result = np.where(mask_BL, blend_quad(mask_BL, self._np_color_dist(H_y, D_y, l_w, c_w), self._np_color_dist(E_y, G_y, l_w, c_w), (H + D) * 0.5, G), result)
+
+        # --- Top-Right Quadrant ---
+        mask_TR = (is_R & ~is_B)[..., np.newaxis]
+        result = np.where(mask_TR, blend_quad(mask_TR, self._np_color_dist(B_y, F_y, l_w, c_w), self._np_color_dist(E_y, C_y, l_w, c_w), (B + F_pix) * 0.5, C), result)
+
+        # --- Top-Left Quadrant ---
+        mask_TL = (~is_R & ~is_B)[..., np.newaxis]
+        result = np.where(mask_TL, blend_quad(mask_TL, self._np_color_dist(B_y, D_y, l_w, c_w), self._np_color_dist(E_y, A_y, l_w, c_w), (B + D) * 0.5, A), result)
+
+        return np.clip(result, 0, 255).astype(np.uint8)
+
+    def _np_color_dist(self, m1, m2, l_w, c_w):
+        """
+        Vectorized luma-weighted perceptual distance formula.
+        """
+        diff = np.abs(m1.astype(np.float32) - m2.astype(np.float32))
+        dist = l_w * diff[..., 0] + c_w * diff[..., 2] + c_w * diff[..., 1]
+        return dist[..., np.newaxis]
+
+    def get_transform_init_args_names(self):
+        return ("scale_factor", "luma_weight", "chroma_weight")

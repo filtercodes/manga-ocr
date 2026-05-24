@@ -46,7 +46,8 @@ def f(args):
             debug_dict["outline_iters"],
             debug_dict["outline_shape"],
             debug_dict["has_shadow"],
-            debug_dict["pipeline_used"]
+            debug_dict["pipeline_used"],
+            debug_dict.get("xbrz_sf", 1.0)
         )
 
     except Exception:
@@ -93,7 +94,7 @@ def run(package=None, n_random=1000, n_limit=None, max_workers=12):
         "source", "id", "text", "vertical", "font_path", 
         "debug_category", "debug_archetype", "debug_luminance", "debug_noise",
         "debug_fg_color", "debug_outline_color", "debug_outline_iters", 
-        "debug_outline_shape", "debug_shadow", "debug_pipeline"
+        "debug_outline_shape", "debug_shadow", "debug_pipeline", "debug_xbrz_sf"
     ]
     
     data_df = pd.DataFrame(data, columns=columns)

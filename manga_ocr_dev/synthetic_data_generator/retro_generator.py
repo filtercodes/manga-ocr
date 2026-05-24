@@ -40,7 +40,8 @@ class RetroGenerator:
             "lcd_green": build_dirt_pipeline("lcd", gb_palette="green"),
             "lcd_gray": build_dirt_pipeline("lcd", gb_palette="gray"),
             "lcd_color": build_dirt_pipeline("lcd", gb_palette="full_color"),
-            "xbrz": build_dirt_pipeline("xbrz")
+            "xbrz": build_dirt_pipeline("xbrz"),
+            "xbrz_freescale": build_dirt_pipeline("xbrz_freescale")
         }
         
         # NEW CORPUS ENGINE: Load the 225k lines from the structured JSON
@@ -272,6 +273,8 @@ class RetroGenerator:
         """
         The Orchestrator. Implements 60/30/10 split and four spatial archetypes.
         """
+        # DEBUG TRAIT: Set to True to ONLY generate images using the xbrz_freescale pipeline
+        FORCE_XBRZ = False
 
         # --- 1. THE SPLIT & SIZING ---
         roll = random.random()
@@ -283,8 +286,19 @@ class RetroGenerator:
         else:
             available_pipelines = ["crt", "lcd_green", "lcd_gray", "lcd_color"]
             if category == "classic":
-                available_pipelines.append("xbrz")
+                # We allow both xBRZ variants for classic UI boxes
+                available_pipelines.extend(["xbrz", "xbrz_freescale"])
+            else:
+                # 15% chance to allow high-quality xbrz_freescale in Stress mode 
+                # to see if it survives where simple xbrz (Lanczos) failed.
+                if random.random() < 0.95:
+                    available_pipelines.append("xbrz_freescale")
+
             mode_filter = random.choice(available_pipelines)
+
+            # Global Test Override
+            if FORCE_XBRZ:
+                mode_filter = "xbrz_freescale"
 
         font_config = random.choice(self.font_pool)
         font_size = font_config["size"]
@@ -303,7 +317,7 @@ class RetroGenerator:
             # Use explicit kanji_safe flag from font config
             if not font_config.get("kanji_safe", True):
                 # 8-bit bitmap fonts (Misaki, Nosutaru, Bold)
-                # Allow exactly 0 or 1 Kanji to provide context without illegible blobs.
+                # Allow exactly 0 Kanji to prevent illegible blobs.
                 if kanji_count < 1:
                     break 
             else:
@@ -632,9 +646,23 @@ class RetroGenerator:
         
         # --- 10. DEGRADATION & PIPELINE ---
         img_np = np.array(canvas.convert("RGB"))
+        xbrz_sf = 1.0 # Default
+
         if category != "pristine":
             active_pipeline = self.pipelines[mode_filter]
-            dirty_img = active_pipeline(image=img_np)["image"]
+
+            # Implement 40/40/20 split for XBRZ smoothing observability
+            if "xbrz" in mode_filter:
+                roll_sf = random.random()
+                if roll_sf < 0.40:
+                    xbrz_sf = 1.0 # Full Edge-Directed
+                elif roll_sf < 0.80:
+                    xbrz_sf = random.uniform(0.0, 1.0) # Morph Spectrum
+                else:
+                    xbrz_sf = 0.0 # Pure Diagonal
+
+            # Pass sc=scale and sf=xbrz_sf to the pipeline
+            dirty_img = active_pipeline(image=img_np, sc=scale, sf=xbrz_sf)["image"]
         else:
             dirty_img = img_np
             
@@ -649,7 +677,8 @@ class RetroGenerator:
             "outline_iters": outline_iters,
             "outline_shape": outline_shape_name,
             "has_shadow": use_shadow,
-            "pipeline_used": mode_filter
+            "pipeline_used": mode_filter,
+            "xbrz_sf": round(xbrz_sf, 2)
         }
 
         return dirty_img, text_gt, font_config["path"], debug_dict

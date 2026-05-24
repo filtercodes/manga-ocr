@@ -1,5 +1,5 @@
 import albumentations as A
-from manga_ocr_dev.synthetic_data_generator.crt_emulator import CRTDistortion, GameBoyFilter, SmoothUpscale
+from manga_ocr_dev.synthetic_data_generator.crt_emulator import CRTDistortion, GameBoyFilter, SmoothUpscale, XBRZFreescale
 
 def build_dirt_pipeline(mode="crt", gb_palette="random"):
     """
@@ -40,6 +40,12 @@ def build_dirt_pipeline(mode="crt", gb_palette="random"):
         random_scale = random.uniform(2.0, 4.0)
         hardware_transforms.append(
             SmoothUpscale(scale_factor=random_scale, p=1.0)
+        )
+    elif mode == "xbrz_freescale":
+        import random
+        random_scale = random.uniform(2.0, 4.0)
+        hardware_transforms.append(
+            XBRZFreescale(scale_factor=random_scale, p=1.0)
         )
 
     return A.Compose([
